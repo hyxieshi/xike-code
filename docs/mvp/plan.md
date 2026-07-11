@@ -236,7 +236,11 @@ xike-code/
 ├── package.json
 ├── tsconfig.json
 ├── .xikerc.json                  # 示例本地配置
-├── spec.md
+├── mvp/
+│   ├── spec.md
+│   ├── plan.md
+│   ├── task.md
+│   └── checklist.md
 ├── src/
 │   ├── index.tsx                  # 入口：启动 ink 渲染
 │   ├── types/
