@@ -1,0 +1,21 @@
+{
+  "name": "xike-code",
+  "version": "0.1.0",
+  "description": "终端 AI 编程助手",
+  "type": "module",
+  "main": "src/index.tsx",
+  "scripts": {
+    "start": "bun run src/index.tsx",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "ink": "^5.0.0",
+    "react": "^18.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "@types/react": "^18.3.0",
+    "bun-types": "^1.3.14",
+    "typescript": "^5.5.0"
+  }
+}
