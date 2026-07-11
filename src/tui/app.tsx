@@ -79,8 +79,8 @@ export function App() {
     setStatusText('🤔 思考中...')
 
     const assistantMsg: InternalMessage = { role: 'assistant', content: '', thinking: '' }
-    conv.addMessage(assistantMsg)
     setMessages(prev => [...prev, assistantMsg])
+    // 注意：不把 assistantMsg 加入 conv.messages，由 streamReply() 内部 push 占位消息
 
     try {
       for await (const event of conv.streamReply()) {
