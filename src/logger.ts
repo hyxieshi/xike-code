@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync } from 'fs'
+import { appendFileSync, mkdirSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
 
@@ -22,6 +22,16 @@ function ensureLogDir() {
     mkdirSync(join(homedir(), '.xike-code'), { recursive: true })
   } catch { /* 忽略目录创建失败 */ }
   logDirInitialized = true
+}
+
+// DEBUG 模式下启动时清空历史日志，避免累积
+if (DEBUG) {
+  try {
+    mkdirSync(join(homedir(), '.xike-code'), { recursive: true })
+  } catch { /* 忽略 */ }
+  try {
+    writeFileSync(LOG_FILE, '', 'utf-8')
+  } catch { /* 忽略 */ }
 }
 
 /**
