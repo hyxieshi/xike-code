@@ -3,6 +3,7 @@
 ## 语言与风格
 - 中文回复、中文注释、中文提交信息
 - 术语/库名保留英文（`stdin`、`stdout`、`token` 等）
+- 代码需要有jsdoc 注释 详解
 
 ## 项目定位
 终端 AI 编程助手，类似 Claude Code / Open Code。TypeScript 实现。
