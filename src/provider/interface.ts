@@ -10,9 +10,10 @@ export interface LLMProvider {
    * 将内部消息格式转换为对应提供商所需的请求体格式
    *
    * @param messages - 内部消息列表
+   * @param tools - 工具定义列表（已按提供商 API 格式化）
    * @returns 提供商定制的请求数据结构
    */
-  prepareMessages(messages: InternalMessage[]): unknown
+  prepareMessages(messages: InternalMessage[], tools?: Record<string, unknown>[]): unknown
 
   /**
    * 发起流式聊天请求，逐段返回事件
