@@ -4,72 +4,82 @@ import type { StreamEvent } from './events'
 import { parseSSEStream } from './sse'
 import { debug } from '../logger'
 
-/** OpenAI 流式响应中单个 choice 的数据结构 */
 interface OpenAIChoice {
-  /** 增量内容 */
   delta: {
-    /** 角色信息（通常只在首块出现） */
     role?: string
-    /** 文本内容增量 */
     content?: string
+    tool_calls?: {
+      index: number
+      id?: string
+      type?: string
+      function?: {
+        name?: string
+        arguments?: string
+      }
+    }[]
   }
-  /** choice 序号 */
   index: number
+  finish_reason?: string | null
 }
 
-/** OpenAI 流式响应中的单个数据块 */
 interface OpenAIChunk {
-  /** choice 列表 */
   choices?: OpenAIChoice[]
 }
 
-/**
- * OpenAI 兼容 API 的 LLM 提供商实现。
- * 适用于 OpenAI 原生接口以及所有兼容 OpenAI 格式的第三方 API（如 Groq、DeepSeek 等）。
- */
 export class OpenAIProvider implements LLMProvider {
-  /** 模型配置 */
   private config: ModelConfig
 
-  /**
-   * @param config - 模型配置，需包含 provider 为 'openai'
-   */
   constructor(config: ModelConfig) {
     this.config = config
   }
 
-  /**
-   * 将内部消息格式转换为 OpenAI Chat Completions API 请求体
-   *
-   * @param messages - 内部消息列表
-   * @returns OpenAI API 兼容的请求体对象
-   */
-  prepareMessages(messages: InternalMessage[]): unknown {
-    return {
-      model: this.config.model,
-      messages: messages.map((m) => ({
+  prepareMessages(messages: InternalMessage[], tools?: Record<string, unknown>[]): unknown {
+    const apiMessages = messages.map((m) => {
+      if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) {
+        return {
+          role: 'assistant',
+          content: m.content || null,
+          tool_calls: m.toolCalls.map(tc => ({
+            id: tc.id,
+            type: 'function',
+            function: {
+              name: tc.name,
+              arguments: JSON.stringify(tc.args),
+            },
+          })),
+        }
+      }
+      if (m.role === 'tool') {
+        return {
+          role: 'tool',
+          tool_call_id: m.toolCallId,
+          content: m.content,
+        }
+      }
+      return {
         role: m.role,
         content: m.content,
-      })),
+      }
+    })
+
+    const body: Record<string, unknown> = {
+      model: this.config.model,
+      messages: apiMessages,
       stream: true,
     }
+
+    if (tools && tools.length > 0) {
+      body.tools = tools
+    }
+
+    return body
   }
 
-  /**
-   * 发起流式聊天请求，逐段产出 StreamEvent
-   *
-   * 使用 SSE 解析器逐块读取 OpenAI 格式的流式响应，
-   * 从每个 chunk 的 `choices[0].delta.content` 中提取文本增量。
-   *
-   * @param messages - 消息列表
-   * @param opts - 请求选项（如取消信号）
-   * @yields 流式事件（text / done / error）
-   */
   async *chat(
     messages: InternalMessage[],
     opts: ChatOptions,
   ): AsyncIterable<StreamEvent> {
-    const body = this.prepareMessages(messages)
+    const body = this.prepareMessages(messages, opts.tools)
 
     let response: Response
     debug('OpenAI request:', { model: this.config.model, baseUrl: this.config.baseUrl, messagesCount: messages.length })
@@ -104,7 +114,14 @@ export class OpenAIProvider implements LLMProvider {
     }
 
     try {
+      const toolCallAccumulators = new Map<number, {
+        id: string
+        name: string
+        argsBuffer: string
+      }>()
+
       for await (const ev of parseSSEStream(response.body, opts.signal)) {
+        debug('OpenAI raw SSE:', ev.data)
         let chunk: OpenAIChunk
         try {
           chunk = JSON.parse(ev.data)
@@ -112,11 +129,60 @@ export class OpenAIProvider implements LLMProvider {
           continue
         }
         const choice = chunk.choices?.[0]
-        if (!choice) continue
-        const content = choice.delta?.content
-        if (content == null) continue
-        yield { type: 'text', content }
+        if (!choice) {
+          debug('OpenAI no choice in chunk:', ev.data)
+          continue
+        }
+
+        const delta = choice.delta
+
+        const textContent = delta?.content
+        if (textContent) {
+          yield { type: 'text', content: textContent }
+        }
+
+        const reasoningContent = (delta as Record<string, unknown>)?.reasoning as string | undefined
+        if (reasoningContent) {
+          yield { type: 'thinking', content: reasoningContent }
+        }
+
+        if (delta?.tool_calls) {
+          for (const tc of delta.tool_calls) {
+            const idx = tc.index
+            let acc = toolCallAccumulators.get(idx)
+            if (!acc) {
+              acc = { id: tc.id ?? '', name: '', argsBuffer: '' }
+              toolCallAccumulators.set(idx, acc)
+            }
+            if (tc.id) acc.id = tc.id
+            if (tc.function?.name) {
+              acc.name = tc.function.name
+              yield { type: 'tool_call_start', id: acc.id, name: acc.name }
+            }
+            if (tc.function?.arguments) {
+              acc.argsBuffer += tc.function.arguments
+              yield { type: 'tool_call_delta', id: acc.id, delta: tc.function.arguments }
+            }
+          }
+        }
+
+        if (choice.finish_reason === 'tool_calls') {
+          debug('OpenAI finish_reason: tool_calls, accumulating', toolCallAccumulators.size, 'tools')
+          for (const [idx, acc] of toolCallAccumulators) {
+            let args: Record<string, unknown> = {}
+            try {
+              args = JSON.parse(acc.argsBuffer)
+            } catch {
+              args = {}
+            }
+            yield { type: 'tool_call_done', id: acc.id, name: acc.name, args }
+          }
+          toolCallAccumulators.clear()
+        } else if (choice.finish_reason) {
+          debug('OpenAI finish_reason:', choice.finish_reason)
+        }
       }
+      debug('OpenAI stream done, toolCalls accumulated:', toolCallAccumulators.size)
       yield { type: 'done' }
     } catch (e) {
       debug('OpenAI error:', e)
