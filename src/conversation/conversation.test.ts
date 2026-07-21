@@ -1,5 +1,7 @@
 import { test, expect, mock } from 'bun:test'
 import { Conversation } from './conversation'
+import { ToolRegistry } from '../tool/registry'
+import type { Tool } from '../tool/interface'
 import type { AppConfig, InternalMessage } from '../types'
 
 function createConfig(overrides: Partial<AppConfig> = {}): AppConfig {
@@ -92,4 +94,54 @@ test('streamReply: activeModel 为 null 时不移除消息', async () => {
     // 不消费也会走完
   }
   expect(conv.messages).toHaveLength(1)
+})
+
+test('streamReply: 工具调用流程（单轮，不自动执行）', async () => {
+  const config = createConfig({ activeModel: 'gpt-4' })
+  const registry = new ToolRegistry()
+  const mockTool: Tool = {
+    name: 'test_tool',
+    description: '测试工具',
+    safety: 'readonly',
+    parameters: { type: 'object', properties: {} },
+    async execute() {
+      return '工具执行结果'
+    },
+  }
+  registry.register(mockTool)
+  const conv = new Conversation(config, registry)
+
+  const originalFetch = globalThis.fetch
+  let callCount = 0
+  globalThis.fetch = ((...args: unknown[]) => {
+    callCount++
+    const body = callCount === 1
+      ? 'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"test_tool","arguments":"{}"}}]},"index":0,"finish_reason":"tool_calls"}]}\n\ndata: [DONE]\n\n'
+      : 'data: {"choices":[{"delta":{"content":"工具已执行完成"},"index":0}]}\n\ndata: [DONE]\n\n'
+    return Promise.resolve(new Response(body, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    }))
+  }) as unknown as typeof fetch
+
+  try {
+    conv.addMessage({ role: 'user', content: '帮我查一下' })
+    const events: any[] = []
+    for await (const ev of conv.streamReply()) {
+      events.push(ev)
+    }
+
+    // 单轮调用，不自动执行工具
+    expect(callCount).toBe(1)
+    expect(events.some(e => e.type === 'tool_call_done')).toBe(true)
+    // streamReply 不再自动执行工具，所以没有 tool_result
+    expect(events.some(e => e.type === 'tool_result')).toBe(false)
+
+    // 验证占位消息的 toolCalls 被标记
+    const assistantMsg = conv.messages.find(m => m.role === 'assistant' && m.toolCalls !== undefined)
+    expect(assistantMsg).toBeDefined()
+    expect(assistantMsg!.toolCalls).toEqual([])
+  } finally {
+    globalThis.fetch = originalFetch
+  }
 })

@@ -33,8 +33,8 @@ test('prepareMessages: 基本 user/assistant 消息转换', () => {
   expect(result.max_tokens).toBe(4096)
   expect(result.stream).toBe(true)
   expect(result.messages).toEqual([
-    { role: 'user', content: '你好' },
-    { role: 'assistant', content: '你好！有什么可以帮你的？' },
+    { role: 'user', content: [{ type: 'text', text: '你好' }] },
+    { role: 'assistant', content: [{ type: 'text', text: '你好！有什么可以帮你的？' }] },
   ])
   expect(result.system).toBeUndefined()
 })
@@ -49,7 +49,7 @@ test('prepareMessages: system 消息放到顶级 system 字段', () => {
 
   expect(result.system).toBe('你是 Claude')
   expect(result.messages).toEqual([
-    { role: 'user', content: '你是谁' },
+    { role: 'user', content: [{ type: 'text', text: '你是谁' }] },
   ])
 })
 
